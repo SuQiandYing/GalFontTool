@@ -5,6 +5,52 @@ import unicodedata
 from fontTools.ttLib import TTFont
 
 
+TEXT_READ_ENCODINGS = ['utf-8', 'utf-8-sig', 'cp932', 'gbk', 'utf-16']
+DANGEROUS_PROXY_CHARS = set(
+    "¢£¥§¨¬°±´¶×÷†‡‰′″※℃№℡←↑→↓⇒∈∑√∝∞∟∠∥∧∨∩∪∫∮∴∵"
+    "≒≠≡≦≧≪≫■□▲△▼▽◆◇◎●★☆♀♂々〆〇〈〉《》【】〒〓〔〕㈱"
+)
+DANGEROUS_PROXY_CHARS.update({chr(i) for i in range(0x2460, 0x2474)})
+DANGEROUS_PROXY_CHARS.update({chr(i) for i in range(0x2160, 0x217A)})
+DANGEROUS_PROXY_CHARS.update({'㎎', '㎏', '㎜', '㎝', '㎞', '㎡', '㏄', '€', '₤', '₩', '₹', '₽', '©', '®', '™', '℠', '≤', '≥'})
+
+
+def is_dangerous_proxy_char(char):
+    if char in DANGEROUS_PROXY_CHARS:
+        return True
+    name = unicodedata.name(char, '')
+    risky_keywords = (
+        'CURRENCY', 'COPYRIGHT', 'REGISTERED', 'TRADE MARK', 'NUMERO',
+        'DEGREE', 'CELSIUS', 'FAHRENHEIT', 'OHM', 'KELVIN', 'ANGSTROM',
+        'ARROW', 'MATHEMATICAL', 'INCREMENT', 'IDENTICAL', 'INFINITY'
+    )
+    return any(keyword in name for keyword in risky_keywords)
+
+
+def read_text_file_auto(path):
+    for enc in TEXT_READ_ENCODINGS:
+        try:
+            with open(path, 'r', encoding=enc) as f:
+                return f.read(), enc
+        except UnicodeDecodeError:
+            continue
+    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+        return f.read(), 'utf-8-replace'
+
+
+def collect_unicode_cmap(font):
+    preferred = font.getBestCmap()
+    if preferred:
+        return dict(preferred)
+    merged = {}
+    if 'cmap' not in font:
+        return merged
+    for table in font['cmap'].tables:
+        if getattr(table, 'isUnicode', lambda: False)() and getattr(table, 'cmap', None):
+            merged.update(table.cmap)
+    return merged
+
+
 def gen_mapping(conf, log_signal, prog_signal):
     src_dir = conf['src_dir']
     out_dir = conf['out_dir']
@@ -22,9 +68,12 @@ def gen_mapping(conf, log_signal, prog_signal):
     all_files = []
     for ext in exts:
         ext = ext.strip()
-        if not ext: continue
-        if not ext.startswith('.'): ext = '.' + ext
+        if not ext:
+            continue
+        if not ext.startswith('.'):
+            ext = '.' + ext
         all_files.extend(glob.glob(os.path.join(src_dir, '**', f'*{ext}'), recursive=True))
+    all_files = sorted(set(all_files))
 
     if not all_files:
         log_signal("⚠️ 未找到任何匹配的文件。")
@@ -35,26 +84,30 @@ def gen_mapping(conf, log_signal, prog_signal):
 
     def extract_chars_from_obj(obj, char_set):
         if isinstance(obj, str):
-            for char in obj:
+            for char in unicodedata.normalize('NFC', obj):
                 char_set.add(char)
         elif isinstance(obj, list):
             for item in obj:
                 extract_chars_from_obj(item, char_set)
         elif isinstance(obj, dict):
-            for value in obj.values():
+            for key, value in obj.items():
+                extract_chars_from_obj(key, char_set)
                 extract_chars_from_obj(value, char_set)
 
     for idx, fpath in enumerate(all_files):
         try:
+            content, used_enc = read_text_file_auto(fpath)
             if fpath.lower().endswith('.json'):
-                with open(fpath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+                try:
+                    data = json.loads(content)
                     extract_chars_from_obj(data, unique_chars)
-            else:
-                with open(fpath, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    for char in content:
+                except Exception:
+                    for char in unicodedata.normalize('NFC', content):
                         unique_chars.add(char)
+                    log_signal(f"⚠️ JSON解析失败，已按纯文本扫描: {os.path.basename(fpath)}")
+            else:
+                for char in unicodedata.normalize('NFC', content):
+                    unique_chars.add(char)
         except Exception as e:
             log_signal(f"⚠️ 读取失败 {os.path.basename(fpath)}: {e}")
         
@@ -68,11 +121,13 @@ def gen_mapping(conf, log_signal, prog_signal):
     if limit_font_path and os.path.exists(limit_font_path):
         try:
             tmp_font = TTFont(limit_font_path)
-            tmp_cmap = tmp_font.getBestCmap()
-            limit_font_chars = set(chr(c) for c in tmp_cmap.keys())
+            tmp_cmap = collect_unicode_cmap(tmp_font)
+            limit_font_chars = set(chr(c) for c in tmp_cmap.keys() if c <= 0x10FFFF)
             tmp_font.close()
-        except:
-            pass
+            log_signal(f"🔒 限制字体可用字符: {len(limit_font_chars)}")
+        except Exception as e:
+            log_signal(f"⚠️ 读取限制字体失败: {e}，将忽略字体限制。")
+            limit_font_chars = None
 
     chars_to_map = []
     chars_safe = 0
@@ -121,13 +176,23 @@ def gen_mapping(conf, log_signal, prog_signal):
         log_signal(f"🔒 <b>启用字体限制模式</b>: {os.path.basename(limit_font_path)}")
         try:
             font = TTFont(limit_font_path)
-            cmap = font.getBestCmap()
-            font_chars = set(chr(c) for c in cmap.keys())
+            cmap = collect_unicode_cmap(font)
+            font_chars = set(chr(c) for c in cmap.keys() if c <= 0x10FFFF)
             font.close()
             
             for char in font_chars:
-                if char in unique_chars: continue
-                if char in ['\n', '\r', '\t']: continue
+                if char in unique_chars:
+                    continue
+                if char in ['\n', '\r', '\t']:
+                    continue
+
+                category = unicodedata.category(char)
+                if category.startswith('C') or category.startswith('Z') or category.startswith('M'):
+                    continue
+                if ord(char) < 0x80:
+                    continue
+                if is_dangerous_proxy_char(char):
+                    continue
                 
                 try:
                     b = char.encode('cp932')
@@ -157,8 +222,15 @@ def gen_mapping(conf, log_signal, prog_signal):
             try:
                 proxy_char = proxy_bytes.decode('cp932')
                 category = unicodedata.category(proxy_char)
-                if proxy_char not in unique_chars and not (category.startswith('C') or category.startswith('Z')):
-                    available_proxies.append(proxy_char)
+                if proxy_char in unique_chars:
+                    continue
+                if category.startswith('C') or category.startswith('Z') or category.startswith('M'):
+                    continue
+                if ord(proxy_char) < 0x80:
+                    continue
+                if is_dangerous_proxy_char(proxy_char):
+                    continue
+                available_proxies.append(proxy_char)
             except UnicodeDecodeError:
                 continue
 
@@ -208,25 +280,19 @@ def gen_mapping(conf, log_signal, prog_signal):
             if not os.path.exists(target_folder):
                 os.makedirs(target_folder)
 
+            content, used_enc = read_text_file_auto(fpath)
             if fpath.lower().endswith('.json'):
                 try:
-                    with open(fpath, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    
+                    data = json.loads(content)
                     new_data = recursive_replace(data, mapping_dict)
-                    
                     with open(target_path, 'w', encoding='utf-8') as f:
                         json.dump(new_data, f, ensure_ascii=False, indent=2)
-                except Exception as e:
+                except Exception:
                     log_signal(f"⚠️ JSON解析失败 ({os.path.basename(fpath)})，尝试作为纯文本处理。")
-                    with open(fpath, 'r', encoding='utf-8') as f:
-                        content = f.read()
                     new_content = "".join([mapping_dict.get(c, c) for c in content])
                     with open(target_path, 'w', encoding='utf-8') as f:
                         f.write(new_content)
             else:
-                with open(fpath, 'r', encoding='utf-8') as f:
-                    content = f.read()
                 new_content = "".join([mapping_dict.get(c, c) for c in content])
                 with open(target_path, 'w', encoding='utf-8') as f:
                     f.write(new_content)
@@ -411,15 +477,7 @@ def restore_mapping(conf, log_signal, prog_signal):
     processed_count = 0
 
     def read_text_file(path):
-        encodings = ['utf-8', 'cp932', 'gbk', 'utf-8-sig', 'utf-16']
-        for enc in encodings:
-            try:
-                with open(path, 'r', encoding=enc) as f:
-                    return f.read(), enc
-            except UnicodeDecodeError:
-                continue
-        with open(path, 'r', encoding='utf-8', errors='replace') as f:
-            return f.read(), 'utf-8'
+        return read_text_file_auto(path)
 
     for idx, fpath in enumerate(all_files):
         try:

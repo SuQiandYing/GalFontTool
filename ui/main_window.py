@@ -30,7 +30,7 @@ class GalFontTool(QMainWindow):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMouseTracking(True)
-        self.resize(1350, 900)
+        self.resize(1350, 950)
         self.setMinimumSize(400, 300)
 
         self.is_dragging = False
@@ -210,10 +210,16 @@ class GalFontTool(QMainWindow):
         self.load_settings = lambda: ui_utils.load_settings(self)
         self.load_font_for_preview = lambda path: ui_utils.load_font_for_preview(self, path)
         self.update_previews = lambda: ui_utils.update_previews(self)
+
+
         self.on_source_font_changed = lambda: ui_utils.on_source_font_changed(self)
+        self.init_system_font_combos = lambda: ui_utils.init_system_font_combos(self)
+        self.bind_system_font_combo = lambda combo, target, preview=False: ui_utils.bind_system_font_combo(self, combo, target, preview)
+
         self.on_mode_change = lambda idx: ui_utils.on_mode_change(self, idx)
         self.create_label = lambda t: ui_utils.create_label(self, t)
-        self.create_file_row = lambda inp, btn: ui_utils.create_file_row(self, inp, btn)
+        self.create_file_row = lambda inp, btn, extra_widgets=None: ui_utils.create_file_row(self, inp, btn, extra_widgets)
+
         self.apply_theme = lambda name: ui_utils.apply_theme(self, name)
         self.switch_tab = lambda idx: ui_utils.switch_tab(self, idx)
         self.set_help_content = lambda: ui_utils.set_help_content(self)
@@ -282,12 +288,21 @@ class GalFontTool(QMainWindow):
         self.in_json = IOSInput("请拖入或选择 .json 码表文件", "custom_map.json"); self.in_json.setToolTip("字符映射表，推荐使用右侧'映射表管理'功能生成")
         self.btn_json = QPushButton("📁"); self.btn_json.setFixedSize(40, 38)
         
-        src_row = QHBoxLayout()
-        self.btn_src.clicked.connect(lambda: self.browse(self.in_src))
-        src_row.addWidget(self.in_src); src_row.addWidget(self.btn_src); src_row.addWidget(self.btn_src_recent)
-        left_layout.addLayout(src_row)
-        left_layout.addLayout(self.create_file_row(self.in_fallback, self.btn_fallback))
+        self.src_system_font_combo = QComboBox()
+        self.src_system_font_combo.setFixedHeight(38)
+        self.src_system_font_combo.setFixedWidth(220)
+        self.src_system_font_combo.setToolTip("选择系统已安装字体作为主字体")
+        left_layout.addLayout(self.create_file_row(self.in_src, self.btn_src, [self.btn_src_recent, self.src_system_font_combo]))
+
+        self.fallback_system_font_combo = QComboBox()
+        self.fallback_system_font_combo.setFixedHeight(38)
+        self.fallback_system_font_combo.setFixedWidth(220)
+        self.fallback_system_font_combo.setToolTip("选择系统已安装字体作为补全字体")
+        left_layout.addLayout(self.create_file_row(self.in_fallback, self.btn_fallback, [self.fallback_system_font_combo]))
+
         left_layout.addLayout(self.create_file_row(self.in_json, self.btn_json))
+
+
 
         left_layout.addSpacing(10)
 
@@ -409,3 +424,7 @@ class GalFontTool(QMainWindow):
         content_layout.addWidget(self.left_card, 40)
         content_layout.addWidget(self.right_card, 60)
         main_layout.addLayout(content_layout)
+
+        self.init_system_font_combos()
+        self.bind_system_font_combo(self.src_system_font_combo, self.in_src, preview=True)
+        self.bind_system_font_combo(self.fallback_system_font_combo, self.in_fallback)

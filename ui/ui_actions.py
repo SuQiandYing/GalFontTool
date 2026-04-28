@@ -309,88 +309,175 @@ def do_merge_fonts(main_window):
         add_cmap = add_font.getBestCmap()
         base_cmap = base_font.getBestCmap()
 
+        def collect_unicode_cmap(font, preferred):
+            if preferred:
+                return dict(preferred)
+            merged = {}
+            if 'cmap' not in font:
+                return merged
+            for table in font['cmap'].tables:
+                if getattr(table, 'isUnicode', lambda: False)() and getattr(table, 'cmap', None):
+                    merged.update(table.cmap)
+            return merged
+
+        add_cmap = collect_unicode_cmap(add_font, add_cmap)
+        base_cmap = collect_unicode_cmap(base_font, base_cmap)
+
+        if not add_cmap:
+            raise ValueError('来源字体缺少可用的 Unicode cmap，无法提取字符映射')
+        if not base_cmap and 'cmap' not in base_font:
+            raise ValueError('基础字体缺少 cmap 表，无法执行合并补字')
+  
         if filter_text:
-            target_codes = [ord(c) for c in filter_text]
+
+            target_codes = sorted(set(ord(c) for c in filter_text))
             main_window.log(f"   目标字符: {filter_text}")
         else:
-            target_codes = [code for code in add_cmap if code not in base_cmap]
+            target_codes = sorted(code for code in add_cmap if code not in base_cmap)
             main_window.log(f"   未指定字符，将补充来源字体中所有缺失的字符 (共 {len(target_codes)} 个)")
 
+        # 仅保留来源字体中存在、且基础字体中缺失的字符，避免重复注入
+        target_codes = [code for code in target_codes if code in add_cmap and code not in base_cmap]
+
         injected_count = 0
+        skipped_codes = []
+
         from fontTools.ttLib.tables._g_l_y_f import GlyphCoordinates
         from fontTools.pens.ttGlyphPen import TTGlyphPen
+        from fontTools.pens.recordingPen import DecomposingRecordingPen
+
         
         add_glyph_set = add_font.getGlyphSet()
-        
+        add_glyf_table = add_font['glyf'] if 'glyf' in add_font else None
+
+        # 按 cmap 子表能力分类，避免把非 BMP 字符写进 16 位子表导致保存失败
+
+        bmp_cmap_tables = []
+        full_unicode_cmap_tables = []
+        for table in base_font['cmap'].tables:
+            if not getattr(table, 'isUnicode', lambda: False)():
+                continue
+            if table.format == 12:
+                full_unicode_cmap_tables.append(table)
+            elif table.format in (4, 6):
+                bmp_cmap_tables.append(table)
+
         # 预先获取字形顺序，并在循环外维护，最后统一回写
         glyph_order = list(base_font.getGlyphOrder())
         order_changed = False
 
+
         for code in target_codes:
-            if code not in add_cmap:
+            if code not in add_cmap or code in base_cmap:
                 continue
-            
-            glyph_name = add_cmap[code]
-            
-            # 使用 TTGlyphPen 提取字形，自动处理复合字形分解和格式转换，确保兼容性
-            pen = TTGlyphPen(add_glyph_set)
-            add_glyph_set[glyph_name].draw(pen)
-            new_glyph = pen.glyph()
-            
-            # 缩放
-            if need_scale:
-                if hasattr(new_glyph, 'coordinates') and len(new_glyph.coordinates) > 0:
-                    coords = new_glyph.coordinates
-                    new_glyph.coordinates = GlyphCoordinates([(int(x * scale), int(y * scale)) for x, y in coords])
-                
-                new_glyph.recalcBounds(None)
-                
-                width, lsb = add_font['hmtx'][glyph_name]
-                width = int(width * scale)
-                lsb = int(lsb * scale)
-            else:
-                new_glyph.recalcBounds(None)
-                width, lsb = add_font['hmtx'][glyph_name]
 
-            # 注入到基础字体
-            new_name = f"uni{code:04X}_merged"
-            
-            if new_name not in glyph_order:
-                glyph_order.append(new_name)
-                order_changed = True
-                
-            base_font['glyf'][new_name] = new_glyph
-            
-            # 写入水平度量 (hmtx)
-            if hasattr(base_font['hmtx'], 'metrics'):
-                base_font['hmtx'].metrics[new_name] = (width, lsb)
-            else:
-                base_font['hmtx'][new_name] = (width, lsb)
+            try:
+                glyph_name = add_cmap[code]
 
-            # 写入垂直度量 (vmtx) - 关键修复：防止 KeyError
-            if 'vmtx' in base_font:
-                v_height = base_upm # 默认高度为 UPM
-                v_tsb = 0           # 默认顶边距为 0
-                
-                # 尝试从来源字体获取垂直度量
-                if 'vmtx' in add_font and glyph_name in add_font['vmtx'].metrics:
-                    vh, tsb = add_font['vmtx'].metrics[glyph_name]
-                    v_height = int(vh * scale)
-                    v_tsb = int(tsb * scale)
-                
-                if hasattr(base_font['vmtx'], 'metrics'):
-                    base_font['vmtx'].metrics[new_name] = (v_height, v_tsb)
+                # 先彻底分解复合字形，再转成目标 glyf，避免保留对来源组件字形的引用
+                recording_pen = DecomposingRecordingPen(add_glyph_set)
+                add_glyph_set[glyph_name].draw(recording_pen)
+                pen = TTGlyphPen(add_glyph_set)
+                recording_pen.replay(pen)
+                new_glyph = pen.glyph()
+
+
+                # 缩放
+                if need_scale:
+                    if hasattr(new_glyph, 'coordinates') and new_glyph.coordinates is not None and len(new_glyph.coordinates) > 0:
+                        coords = new_glyph.coordinates
+                        new_glyph.coordinates = GlyphCoordinates([(int(x * scale), int(y * scale)) for x, y in coords])
+
+                    if add_glyf_table is not None:
+                        new_glyph.recalcBounds(add_glyf_table)
+
+                    width, lsb = add_font['hmtx'][glyph_name]
+                    width = int(width * scale)
+                    lsb = int(lsb * scale)
                 else:
-                    base_font['vmtx'][new_name] = (v_height, v_tsb)
-            
-            # 彻底更新所有 cmap 表，确保在所有平台可见
-            for table in base_font['cmap'].tables:
-                table.cmap[code] = new_name
-            
-            injected_count += 1
+                    if add_glyf_table is not None:
+                        new_glyph.recalcBounds(add_glyf_table)
+                    width, lsb = add_font['hmtx'][glyph_name]
+
+                # 注入到基础字体
+                new_name = f"uni{code:04X}_merged" if code <= 0xFFFF else f"u{code:X}_merged"
+
+                if new_name not in glyph_order:
+                    glyph_order.append(new_name)
+                    order_changed = True
+
+                base_font['glyf'][new_name] = new_glyph
+
+                # 写入水平度量 (hmtx)
+                if hasattr(base_font['hmtx'], 'metrics'):
+                    base_font['hmtx'].metrics[new_name] = (width, lsb)
+                else:
+                    base_font['hmtx'][new_name] = (width, lsb)
+
+                # 写入垂直度量 (vmtx)
+                if 'vmtx' in base_font:
+                    v_height = base_upm
+                    v_tsb = 0
+
+                    if 'vmtx' in add_font and glyph_name in add_font['vmtx'].metrics:
+                        vh, tsb = add_font['vmtx'].metrics[glyph_name]
+                        v_height = int(vh * scale)
+                        v_tsb = int(tsb * scale)
+
+                    if hasattr(base_font['vmtx'], 'metrics'):
+                        base_font['vmtx'].metrics[new_name] = (v_height, v_tsb)
+                    else:
+                        base_font['vmtx'][new_name] = (v_height, v_tsb)
+
+                # 仅更新兼容的 Unicode cmap 子表，避免非 BMP 字符写入 format 4/6 触发 unsigned short 溢出
+                mapped = False
+                if code <= 0xFFFF:
+                    for table in bmp_cmap_tables:
+                        table.cmap[code] = new_name
+                        mapped = True
+                    for table in full_unicode_cmap_tables:
+                        table.cmap[code] = new_name
+                        mapped = True
+                else:
+                    for table in full_unicode_cmap_tables:
+                        table.cmap[code] = new_name
+                        mapped = True
+
+                if not mapped:
+                    skipped_codes.append(code)
+                    if new_name in base_font['glyf']:
+                        del base_font['glyf'][new_name]
+                    if hasattr(base_font['hmtx'], 'metrics') and new_name in base_font['hmtx'].metrics:
+                        del base_font['hmtx'].metrics[new_name]
+                    elif new_name in base_font['hmtx']:
+                        del base_font['hmtx'][new_name]
+                    if 'vmtx' in base_font:
+                        if hasattr(base_font['vmtx'], 'metrics') and new_name in base_font['vmtx'].metrics:
+                            del base_font['vmtx'].metrics[new_name]
+                        elif new_name in base_font['vmtx']:
+                            del base_font['vmtx'][new_name]
+                    if new_name in glyph_order:
+                        glyph_order.remove(new_name)
+                    continue
+
+                base_cmap[code] = new_name
+                injected_count += 1
+            except Exception as glyph_error:
+                skipped_codes.append(code)
+                main_window.log(f"   ⚠️ 跳过字符 U+{code:04X} / {repr(chr(code))}: {glyph_error}")
+                continue
+
+
+
+        if skipped_codes:
+            preview = ''.join(chr(code) for code in skipped_codes[:20] if code <= 0x10FFFF)
+            main_window.log(f"   ⚠️ 跳过 {len(skipped_codes)} 个无法写入兼容 cmap 的字符")
+            if preview:
+                main_window.log(f"   ⚠️ 跳过示例: {preview}")
 
         if order_changed:
             base_font.setGlyphOrder(glyph_order)
+
 
         # 移除可能冲突的旧表 (GSUB/GPOS 等，因为字形索引已变)
         for tag in ['GSUB', 'GPOS', 'GDEF']:
@@ -938,6 +1025,15 @@ def do_gen_font(main_window):
     }
     main_window.run_worker('font', conf)
 
+def parse_rgba(s):
+    try:
+        s = s.strip('()[] ')
+        parts = [int(x.strip()) for x in s.split(',')]
+        if len(parts) == 3: return (parts[0], parts[1], parts[2], 255)
+        if len(parts) == 4: return tuple(parts)
+    except: pass
+    return (255, 255, 255, 255)
+
 def do_gen_pic(main_window):
     conf = {
         'font': main_window.pic_font.text(), 'folder': main_window.pic_folder.text(), 'format': main_window.pic_fmt.text(),
@@ -945,8 +1041,33 @@ def do_gen_pic(main_window):
         'cw': int(main_window.pic_cw.text()), 'ch': int(main_window.pic_ch.text()),
         'iw': int(main_window.pic_iw.text()), 'ih': int(main_window.pic_ih.text()),
         'img_w': int(main_window.pic_imw.text()), 'img_h': int(main_window.pic_imh.text()),
-        'ix': int(main_window.pic_ix.text()), 'iy': int(main_window.pic_iy.text())
+        'ix': int(main_window.pic_ix.text()), 'iy': int(main_window.pic_iy.text()),
+        # 高级设置
+        'bold_s': int(main_window.pic_bold_s.text()) if hasattr(main_window, 'pic_bold_s') else 2,
+        'out_w': int(main_window.pic_out_w.text()) if hasattr(main_window, 'pic_out_w') else 1,
+        'shd_x': int(main_window.pic_shd_x.text()) if hasattr(main_window, 'pic_shd_x') else 2,
+        'shd_y': int(main_window.pic_shd_y.text()) if hasattr(main_window, 'pic_shd_y') else 1,
+        'color_f': parse_rgba(main_window.pic_color_f.text()) if hasattr(main_window, 'pic_color_f') else (255,255,255,255),
+        'color_o': parse_rgba(main_window.pic_color_o.text()) if hasattr(main_window, 'pic_color_o') else (0,0,0,255),
+        'color_s': parse_rgba(main_window.pic_color_s.text()) if hasattr(main_window, 'pic_color_s') else (0,0,0,255),
+        'color_b': parse_rgba(main_window.pic_color_b.text()) if hasattr(main_window, 'pic_color_b') else (0,0,0,0),
+                'kw_b': main_window.pic_kw_b.text() if hasattr(main_window, 'pic_kw_b') else "太",
+        'kw_o': main_window.pic_kw_o.text() if hasattr(main_window, 'pic_kw_o') else "袋",
+        'kw_s': main_window.pic_kw_s.text() if hasattr(main_window, 'pic_kw_s') else "影",
+        'add_char': main_window.pic_add_char.text() if hasattr(main_window, 'pic_add_char') else "･",
+        'sym_ll': main_window.pic_sym_ll.text() if hasattr(main_window, 'pic_sym_ll') else "，、。．；：！？",
+        'sym_left': main_window.pic_sym_left.text() if hasattr(main_window, 'pic_sym_left') else "“”‘’'\"°′″",
+        'sym_ellipsis': main_window.pic_sym_ellipsis.text() if hasattr(main_window, 'pic_sym_ellipsis') else "…",
+        'sym_bottom': main_window.pic_sym_bottom.text() if hasattr(main_window, 'pic_sym_bottom') else "…？",
+        'sym_center': main_window.pic_sym_center.text() if hasattr(main_window, 'pic_sym_center') else "‥·",
+        'punc_x': int(main_window.pic_punc_x.text()) if hasattr(main_window, 'pic_punc_x') else 2,
+        'punc_y': int(main_window.pic_punc_y.text()) if hasattr(main_window, 'pic_punc_y') else 1,
+        'ellipsis_y': int(main_window.pic_ellipsis_y.text()) if hasattr(main_window, 'pic_ellipsis_y') else 4,
+        'bottom_pad': int(main_window.pic_bottom_pad.text()) if hasattr(main_window, 'pic_bottom_pad') else 0,
+        'center_y': int(main_window.pic_center_y.text()) if hasattr(main_window, 'pic_center_y') else 2,
+        'left_pad': int(main_window.pic_left_pad.text()) if hasattr(main_window, 'pic_left_pad') else 0,
     }
+
     main_window.run_worker('pic', conf)
 
 def do_gen_tga(main_window):
@@ -1238,7 +1359,39 @@ def do_export_config(main_window):
             'fmt': main_window.pic_fmt.text(),
             'fs': main_window.pic_fs.text(),
             'cnt': main_window.pic_cnt.text(),
+            'cw': main_window.pic_cw.text(),
+            'ch': main_window.pic_ch.text(),
+            'iw': main_window.pic_iw.text(),
+            'ih': main_window.pic_ih.text(),
+            'imw': main_window.pic_imw.text(),
+            'imh': main_window.pic_imh.text(),
+            'ix': main_window.pic_ix.text(),
+            'iy': main_window.pic_iy.text(),
+            'bold_s': main_window.pic_bold_s.text(),
+            'out_w': main_window.pic_out_w.text(),
+            'shd_x': main_window.pic_shd_x.text(),
+            'shd_y': main_window.pic_shd_y.text(),
+            'color_f': main_window.pic_color_f.text(),
+            'color_o': main_window.pic_color_o.text(),
+            'color_s': main_window.pic_color_s.text(),
+            'color_b': main_window.pic_color_b.text(),
+                        'kw_b': main_window.pic_kw_b.text(),
+            'kw_o': main_window.pic_kw_o.text(),
+            'kw_s': main_window.pic_kw_s.text(),
+            'add_char': main_window.pic_add_char.text(),
+            'sym_ll': main_window.pic_sym_ll.text() if hasattr(main_window, 'pic_sym_ll') else '',
+            'sym_left': main_window.pic_sym_left.text() if hasattr(main_window, 'pic_sym_left') else '',
+            'sym_ellipsis': main_window.pic_sym_ellipsis.text() if hasattr(main_window, 'pic_sym_ellipsis') else '',
+            'sym_bottom': main_window.pic_sym_bottom.text() if hasattr(main_window, 'pic_sym_bottom') else '',
+            'sym_center': main_window.pic_sym_center.text() if hasattr(main_window, 'pic_sym_center') else '',
+            'punc_x': main_window.pic_punc_x.text() if hasattr(main_window, 'pic_punc_x') else '',
+            'punc_y': main_window.pic_punc_y.text() if hasattr(main_window, 'pic_punc_y') else '',
+            'ellipsis_y': main_window.pic_ellipsis_y.text() if hasattr(main_window, 'pic_ellipsis_y') else '',
+            'bottom_pad': main_window.pic_bottom_pad.text() if hasattr(main_window, 'pic_bottom_pad') else '',
+            'center_y': main_window.pic_center_y.text() if hasattr(main_window, 'pic_center_y') else '',
+            'left_pad': main_window.pic_left_pad.text() if hasattr(main_window, 'pic_left_pad') else '',
         },
+
         'tga': {
             'font': main_window.tga_font.text(),
             'dat': main_window.tga_dat.text(),
@@ -1330,6 +1483,38 @@ def do_import_config(main_window):
             if 'fmt' in p: main_window.pic_fmt.setText(p['fmt'])
             if 'fs' in p: main_window.pic_fs.setText(p['fs'])
             if 'cnt' in p: main_window.pic_cnt.setText(p['cnt'])
+            if 'cw' in p: main_window.pic_cw.setText(p['cw'])
+            if 'ch' in p: main_window.pic_ch.setText(p['ch'])
+            if 'iw' in p: main_window.pic_iw.setText(p['iw'])
+            if 'ih' in p: main_window.pic_ih.setText(p['ih'])
+            if 'imw' in p: main_window.pic_imw.setText(p['imw'])
+            if 'imh' in p: main_window.pic_imh.setText(p['imh'])
+            if 'ix' in p: main_window.pic_ix.setText(p['ix'])
+            if 'iy' in p: main_window.pic_iy.setText(p['iy'])
+            if 'bold_s' in p: main_window.pic_bold_s.setText(p['bold_s'])
+            if 'out_w' in p: main_window.pic_out_w.setText(p['out_w'])
+            if 'shd_x' in p: main_window.pic_shd_x.setText(p['shd_x'])
+            if 'shd_y' in p: main_window.pic_shd_y.setText(p['shd_y'])
+            if 'color_f' in p: main_window.pic_color_f.setText(p['color_f'])
+            if 'color_o' in p: main_window.pic_color_o.setText(p['color_o'])
+            if 'color_s' in p: main_window.pic_color_s.setText(p['color_s'])
+            if 'color_b' in p: main_window.pic_color_b.setText(p['color_b'])
+            if 'kw_b' in p: main_window.pic_kw_b.setText(p['kw_b'])
+            if 'kw_o' in p: main_window.pic_kw_o.setText(p['kw_o'])
+            if 'kw_s' in p: main_window.pic_kw_s.setText(p['kw_s'])
+            if 'add_char' in p: main_window.pic_add_char.setText(p['add_char'])
+            if 'sym_ll' in p and hasattr(main_window, 'pic_sym_ll'): main_window.pic_sym_ll.setText(p['sym_ll'])
+            if 'sym_left' in p and hasattr(main_window, 'pic_sym_left'): main_window.pic_sym_left.setText(p['sym_left'])
+            if 'sym_ellipsis' in p and hasattr(main_window, 'pic_sym_ellipsis'): main_window.pic_sym_ellipsis.setText(p['sym_ellipsis'])
+            if 'sym_bottom' in p and hasattr(main_window, 'pic_sym_bottom'): main_window.pic_sym_bottom.setText(p['sym_bottom'])
+            if 'sym_center' in p and hasattr(main_window, 'pic_sym_center'): main_window.pic_sym_center.setText(p['sym_center'])
+            if 'punc_x' in p and hasattr(main_window, 'pic_punc_x'): main_window.pic_punc_x.setText(p['punc_x'])
+            if 'punc_y' in p and hasattr(main_window, 'pic_punc_y'): main_window.pic_punc_y.setText(p['punc_y'])
+            if 'ellipsis_y' in p and hasattr(main_window, 'pic_ellipsis_y'): main_window.pic_ellipsis_y.setText(p['ellipsis_y'])
+            if 'bottom_pad' in p and hasattr(main_window, 'pic_bottom_pad'): main_window.pic_bottom_pad.setText(p['bottom_pad'])
+            if 'center_y' in p and hasattr(main_window, 'pic_center_y'): main_window.pic_center_y.setText(p['center_y'])
+            if 'left_pad' in p and hasattr(main_window, 'pic_left_pad'): main_window.pic_left_pad.setText(p['left_pad'])
+
         
         if 'tga' in config:
             tg = config['tga']

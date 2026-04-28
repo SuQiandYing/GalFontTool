@@ -1,16 +1,102 @@
 import os
+import re
 import json
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                              QTextEdit, QFrame, QLineEdit, QComboBox, QCheckBox,
                              QGridLayout, QScrollArea, QTableWidget, QTableWidgetItem,
-                             QHeaderView, QSizePolicy, QSplitter, QStackedWidget)
+                             QHeaderView, QSizePolicy, QSplitter, QStackedWidget, QGroupBox)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
+
 
 from .widgets import IOSInput, IOSButton
 from config import HAS_BROTLI
 
+FONT_PRESET_CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), "font_presets.json"))
+DEFAULT_FONT_PRESETS = {
+    38: {
+        "font_size": 38,
+        "img_w": 1024,
+        "img_h": 640,
+        "offset_x": 5,
+        "offset_y": 11,
+        "cell_w": 48,
+        "cell_h": 48,
+        "columns": 19,
+        "rows": 10,
+    },
+    31: {
+        "font_size": 31,
+        "img_w": 800,
+        "img_h": 440,
+        "offset_x": 5,
+        "offset_y": 10,
+        "cell_w": 41,
+        "cell_h": 41,
+        "columns": 19,
+        "rows": 10,
+    },
+}
+
+def _load_pic_font_presets():
+    presets = dict(DEFAULT_FONT_PRESETS)
+    if not os.path.exists(FONT_PRESET_CONFIG_PATH):
+        return presets
+    try:
+        with open(FONT_PRESET_CONFIG_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        loaded = {}
+        for raw_size, raw_preset in dict(data).items():
+            size = int(raw_size)
+            loaded[size] = {
+                'font_size': int(raw_preset['font_size']),
+                'img_w': int(raw_preset['img_w']),
+                'img_h': int(raw_preset['img_h']),
+                'offset_x': int(raw_preset['offset_x']),
+                'offset_y': int(raw_preset['offset_y']),
+                'cell_w': int(raw_preset['cell_w']),
+                'cell_h': int(raw_preset['cell_h']),
+                'columns': int(raw_preset['columns']),
+                'rows': int(raw_preset['rows']),
+            }
+        return loaded or presets
+    except Exception:
+        return presets
+
+def apply_pic_font_size_preset(main_window):
+    if not hasattr(main_window, 'pic_fs'):
+        return
+    text = main_window.pic_fs.text().strip()
+    if not text.isdigit():
+        return
+    size = int(text)
+    presets = _load_pic_font_presets()
+    preset = presets.get(size)
+    if not preset:
+        return
+
+    font_size = preset['font_size']
+    cell_w = preset['cell_w']
+    cell_h = preset['cell_h']
+    gap_x = max(0, cell_w - font_size)
+    gap_y = max(0, cell_h - font_size)
+
+    main_window.pic_cnt.setText(str(preset['columns']))
+    main_window.pic_cw.setText(str(font_size))
+    main_window.pic_ch.setText(str(font_size))
+    main_window.pic_iw.setText(str(gap_x))
+    main_window.pic_ih.setText(str(gap_y))
+    main_window.pic_imw.setText(str(preset['img_w']))
+    main_window.pic_imh.setText(str(preset['img_h']))
+    main_window.pic_ix.setText(str(preset['offset_x']))
+    main_window.pic_iy.setText(str(preset['offset_y']))
+
+    current_folder = main_window.pic_folder.text().strip() if hasattr(main_window, 'pic_folder') else ''
+    if not current_folder or re.fullmatch(r'image\d+', current_folder):
+        main_window.pic_folder.setText(f'image{size}')
+
 def setup_image_font_ui(main_window, parent_widget):
+
     """统一的图片字库生成界面，通过下拉框选择不同模式"""
     l = QVBoxLayout(parent_widget)
     
@@ -56,16 +142,23 @@ def setup_image_font_ui(main_window, parent_widget):
     main_window.pic_fmt.setToolTip("图片格式：png 或 webp")
     gd_pic.addWidget(QLabel("使用字体:"), 0, 0)
     gd_pic.addLayout(main_window.create_file_row(main_window.pic_font, btn_pic_font), 0, 1)
-    gd_pic.addWidget(QLabel("保存目录:"), 1, 0)
-    gd_pic.addWidget(main_window.pic_folder, 1, 1)
-    gd_pic.addWidget(QLabel("图片格式:"), 2, 0)
-    gd_pic.addWidget(main_window.pic_fmt, 2, 1)
+    main_window.pic_system_font_combo = QComboBox()
+    main_window.pic_system_font_combo.setFixedHeight(32)
+    main_window.pic_system_font_combo.setToolTip("选择系统已安装字体作为图片字库源字体")
+    gd_pic.addWidget(QLabel("系统字体:"), 1, 0)
+    gd_pic.addWidget(main_window.pic_system_font_combo, 1, 1)
+    gd_pic.addWidget(QLabel("保存目录:"), 2, 0)
+    gd_pic.addWidget(main_window.pic_folder, 2, 1)
+    gd_pic.addWidget(QLabel("图片格式:"), 3, 0)
+    gd_pic.addWidget(main_window.pic_fmt, 3, 1)
     main_window.pic_fs = IOSInput("38", "38")
     main_window.pic_fs.setToolTip("字体渲染大小")
     main_window.pic_cnt = IOSInput("19", "19")
     main_window.pic_cnt.setToolTip("每行包含多少个字符")
     gd_pic.addWidget(QLabel("字体大小(px):"), 0, 2)
     gd_pic.addWidget(main_window.pic_fs, 0, 3)
+    main_window.pic_fs.textChanged.connect(lambda _text: apply_pic_font_size_preset(main_window))
+
     gd_pic.addWidget(QLabel("每行字符数:"), 1, 2)
     gd_pic.addWidget(main_window.pic_cnt, 1, 3)
     main_window.pic_cw = IOSInput("W", "38")
@@ -97,8 +190,97 @@ def setup_image_font_ui(main_window, parent_widget):
     box_xy.addWidget(main_window.pic_iy)
     gd_pic.addLayout(box_xy, 4, 3)
     l_pic.addLayout(gd_pic)
+
+    adv_group = QGroupBox("高级渲染设置")
+    adv_group.setStyleSheet("QGroupBox { border: none; margin-top: 8px; } QGroupBox::title { subcontrol-origin: margin; left: 0px; padding: 0 4px 0 0; }")
+    adv_layout = QGridLayout(adv_group)
+    adv_layout.setSpacing(10)
+
+    main_window.pic_bold_s = IOSInput("2", "2")
+    main_window.pic_out_w = IOSInput("1", "1")
+    main_window.pic_shd_x = IOSInput("2", "2")
+    main_window.pic_shd_y = IOSInput("1", "1")
+
+    adv_layout.addWidget(QLabel("粗体强度:"), 0, 0)
+    adv_layout.addWidget(main_window.pic_bold_s, 0, 1)
+    adv_layout.addWidget(QLabel("描边宽度:"), 0, 2)
+    adv_layout.addWidget(main_window.pic_out_w, 0, 3)
+    adv_layout.addWidget(QLabel("阴影偏移X:"), 0, 4)
+    adv_layout.addWidget(main_window.pic_shd_x, 0, 5)
+    adv_layout.addWidget(QLabel("阴影偏移Y:"), 0, 6)
+    adv_layout.addWidget(main_window.pic_shd_y, 0, 7)
+
+    main_window.pic_color_f = IOSInput("(255,255,255,255)", "(255,255,255,255)")
+    main_window.pic_color_o = IOSInput("(0,0,0,255)", "(0,0,0,255)")
+    main_window.pic_color_s = IOSInput("(0,0,0,255)", "(0,0,0,255)")
+    main_window.pic_color_b = IOSInput("(0,0,0,0)", "(0,0,0,0)")
+
+    adv_layout.addWidget(QLabel("填充颜色:"), 1, 0)
+    adv_layout.addWidget(main_window.pic_color_f, 1, 1)
+    adv_layout.addWidget(QLabel("描边颜色:"), 1, 2)
+    adv_layout.addWidget(main_window.pic_color_o, 1, 3)
+    adv_layout.addWidget(QLabel("阴影颜色:"), 1, 4)
+    adv_layout.addWidget(main_window.pic_color_s, 1, 5)
+    adv_layout.addWidget(QLabel("背景颜色:"), 1, 6)
+    adv_layout.addWidget(main_window.pic_color_b, 1, 7)
+
+    main_window.pic_kw_b = IOSInput("太", "太")
+    main_window.pic_kw_o = IOSInput("袋", "袋")
+    main_window.pic_kw_s = IOSInput("影", "影")
+    main_window.pic_add_char = IOSInput("･", "･")
+
+    adv_layout.addWidget(QLabel("粗体关键字:"), 2, 0)
+    adv_layout.addWidget(main_window.pic_kw_b, 2, 1)
+    adv_layout.addWidget(QLabel("描边关键字:"), 2, 2)
+    adv_layout.addWidget(main_window.pic_kw_o, 2, 3)
+    adv_layout.addWidget(QLabel("阴影关键字:"), 2, 4)
+    adv_layout.addWidget(main_window.pic_kw_s, 2, 5)
+    adv_layout.addWidget(QLabel("缺字填充符:"), 2, 6)
+    adv_layout.addWidget(main_window.pic_add_char, 2, 7)
+
+    main_window.pic_sym_ll = IOSInput("，、。．；：！？", "，、。．；：！？")
+    main_window.pic_sym_left = IOSInput("“”‘’'\"°′″", "“”‘’'\"°′″")
+    main_window.pic_sym_ellipsis = IOSInput("…", "…")
+    main_window.pic_sym_bottom = IOSInput("…？", "…？")
+    main_window.pic_sym_center = IOSInput("‥·", "‥·")
+
+    adv_layout.addWidget(QLabel("左下标点:"), 3, 0)
+    adv_layout.addWidget(main_window.pic_sym_ll, 3, 1)
+    adv_layout.addWidget(QLabel("贴左字符:"), 3, 2)
+    adv_layout.addWidget(main_window.pic_sym_left, 3, 3)
+    adv_layout.addWidget(QLabel("省略号类:"), 3, 4)
+    adv_layout.addWidget(main_window.pic_sym_ellipsis, 3, 5)
+    adv_layout.addWidget(QLabel("底部对齐:"), 3, 6)
+    adv_layout.addWidget(main_window.pic_sym_bottom, 3, 7)
+
+    main_window.pic_punc_x = IOSInput("2", "2")
+    main_window.pic_punc_y = IOSInput("1", "1")
+    main_window.pic_ellipsis_y = IOSInput("4", "4")
+    main_window.pic_bottom_pad = IOSInput("0", "0")
+    main_window.pic_center_y = IOSInput("2", "2")
+    main_window.pic_left_pad = IOSInput("0", "0")
+
+    adv_layout.addWidget(QLabel("左下X偏移:"), 4, 0)
+    adv_layout.addWidget(main_window.pic_punc_x, 4, 1)
+    adv_layout.addWidget(QLabel("左下Y偏移:"), 4, 2)
+    adv_layout.addWidget(main_window.pic_punc_y, 4, 3)
+    adv_layout.addWidget(QLabel("省略号Y偏移:"), 4, 4)
+    adv_layout.addWidget(main_window.pic_ellipsis_y, 4, 5)
+    adv_layout.addWidget(QLabel("底部留白:"), 4, 6)
+    adv_layout.addWidget(main_window.pic_bottom_pad, 4, 7)
+
+    adv_layout.addWidget(QLabel("视觉居中字符:"), 5, 0)
+    adv_layout.addWidget(main_window.pic_sym_center, 5, 1)
+    adv_layout.addWidget(QLabel("视觉居中Y偏移:"), 5, 2)
+    adv_layout.addWidget(main_window.pic_center_y, 5, 3)
+    adv_layout.addWidget(QLabel("贴左内边距:"), 5, 4)
+    adv_layout.addWidget(main_window.pic_left_pad, 5, 5)
+    l_pic.addWidget(adv_group)
+    apply_pic_font_size_preset(main_window)
+  
     l_pic.addStretch()
     main_window.imgfont_stack.addWidget(p_pic)
+
     
     # === 模式 1: TGA 字库 ===
     p_tga = QWidget()
@@ -116,12 +298,17 @@ def setup_image_font_ui(main_window, parent_widget):
     main_window.tga_eng_p.setToolTip("游戏内部读取纹理的虚拟路径")
     gd_tga.addWidget(QLabel("字体路径:"), 0, 0)
     gd_tga.addLayout(main_window.create_file_row(main_window.tga_font, btn_tga_font), 0, 1)
-    gd_tga.addWidget(QLabel("索引文件名:"), 1, 0)
-    gd_tga.addWidget(main_window.tga_dat, 1, 1)
-    gd_tga.addWidget(QLabel("内部识别名:"), 2, 0)
-    gd_tga.addWidget(main_window.tga_eng_n, 2, 1)
-    gd_tga.addWidget(QLabel("游戏内路径:"), 3, 0)
-    gd_tga.addWidget(main_window.tga_eng_p, 3, 1)
+    main_window.tga_system_font_combo = QComboBox()
+    main_window.tga_system_font_combo.setFixedHeight(32)
+    main_window.tga_system_font_combo.setToolTip("选择系统已安装字体作为 TGA 字库源字体")
+    gd_tga.addWidget(QLabel("系统字体:"), 1, 0)
+    gd_tga.addWidget(main_window.tga_system_font_combo, 1, 1)
+    gd_tga.addWidget(QLabel("索引文件名:"), 2, 0)
+    gd_tga.addWidget(main_window.tga_dat, 2, 1)
+    gd_tga.addWidget(QLabel("内部识别名:"), 3, 0)
+    gd_tga.addWidget(main_window.tga_eng_n, 3, 1)
+    gd_tga.addWidget(QLabel("游戏内路径:"), 4, 0)
+    gd_tga.addWidget(main_window.tga_eng_p, 4, 1)
     main_window.tga_fs = IOSInput("", "22")
     main_window.tga_cw = IOSInput("W", "24")
     main_window.tga_ch = IOSInput("H", "24")
@@ -166,18 +353,23 @@ def setup_image_font_ui(main_window, parent_widget):
     main_window.bmp_depth = IOSInput("Depth", "32")
     gd_bmp.addWidget(QLabel("字体路径:"), 0, 0)
     gd_bmp.addLayout(main_window.create_file_row(main_window.bmp_font, btn_bmp_font), 0, 1)
-    gd_bmp.addWidget(QLabel("字号(pt/px):"), 1, 0)
-    gd_bmp.addWidget(main_window.bmp_fs, 1, 1)
-    gd_bmp.addWidget(QLabel("单字格大小:"), 2, 0)
-    gd_bmp.addWidget(main_window.bmp_sz, 2, 1)
-    gd_bmp.addWidget(QLabel("每行字数:"), 3, 0)
-    gd_bmp.addWidget(main_window.bmp_cnt, 3, 1)
-    gd_bmp.addWidget(QLabel("纹理宽度:"), 4, 0)
-    gd_bmp.addWidget(main_window.bmp_w, 4, 1)
-    gd_bmp.addWidget(QLabel("缩放倍率:"), 5, 0)
-    gd_bmp.addWidget(main_window.bmp_scale, 5, 1)
-    gd_bmp.addWidget(QLabel("颜色位深:"), 6, 0)
-    gd_bmp.addWidget(main_window.bmp_depth, 6, 1)
+    main_window.bmp_system_font_combo = QComboBox()
+    main_window.bmp_system_font_combo.setFixedHeight(32)
+    main_window.bmp_system_font_combo.setToolTip("选择系统已安装字体作为 BMP 字库源字体")
+    gd_bmp.addWidget(QLabel("系统字体:"), 1, 0)
+    gd_bmp.addWidget(main_window.bmp_system_font_combo, 1, 1)
+    gd_bmp.addWidget(QLabel("字号(pt/px):"), 2, 0)
+    gd_bmp.addWidget(main_window.bmp_fs, 2, 1)
+    gd_bmp.addWidget(QLabel("单字格大小:"), 3, 0)
+    gd_bmp.addWidget(main_window.bmp_sz, 3, 1)
+    gd_bmp.addWidget(QLabel("每行字数:"), 4, 0)
+    gd_bmp.addWidget(main_window.bmp_cnt, 4, 1)
+    gd_bmp.addWidget(QLabel("纹理宽度:"), 5, 0)
+    gd_bmp.addWidget(main_window.bmp_w, 5, 1)
+    gd_bmp.addWidget(QLabel("缩放倍率:"), 6, 0)
+    gd_bmp.addWidget(main_window.bmp_scale, 6, 1)
+    gd_bmp.addWidget(QLabel("颜色位深:"), 7, 0)
+    gd_bmp.addWidget(main_window.bmp_depth, 7, 1)
     l_bmp.addLayout(gd_bmp)
     l_bmp.addStretch()
     main_window.imgfont_stack.addWidget(p_bmp)
@@ -223,6 +415,12 @@ def setup_image_font_ui(main_window, parent_widget):
     main_window.imgfont_stack.addWidget(p_bmfont)
     
     l.addWidget(main_window.imgfont_stack)
+    if hasattr(main_window, 'init_system_font_combos'):
+        main_window.init_system_font_combos()
+    if hasattr(main_window, 'bind_system_font_combo'):
+        main_window.bind_system_font_combo(main_window.pic_system_font_combo, main_window.pic_font)
+        main_window.bind_system_font_combo(main_window.tga_system_font_combo, main_window.tga_font)
+        main_window.bind_system_font_combo(main_window.bmp_system_font_combo, main_window.bmp_font)
     l.addStretch()
     
     main_window.btn_run_imgfont = IOSButton("开始生成")

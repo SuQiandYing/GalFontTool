@@ -4,6 +4,8 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox, QLabel, QHBoxLayout, QPush
 from PyQt6.QtGui import QColor, QFont, QFontDatabase
 from config import THEMES
 from core.worker import Worker
+from core.system_fonts import encode_system_font_value, decode_system_font_value, is_system_font_value, list_all_system_font_families
+
 
 def log(main_window, m):
     main_window.log_area.append(m)
@@ -24,6 +26,59 @@ def browse_folder(main_window, line_edit):
     d = QFileDialog.getExistingDirectory(main_window, "选择目录", "")
     if d:
         line_edit.setText(d)
+
+
+def init_system_font_combos(main_window):
+    families = list_all_system_font_families()
+    combo_names = [
+        'src_system_font_combo',
+        'fallback_system_font_combo',
+        'pic_system_font_combo',
+        'tga_system_font_combo',
+        'bmp_system_font_combo',
+    ]
+    for name in combo_names:
+        combo = getattr(main_window, name, None)
+        if combo is None:
+            continue
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("请选择系统字体...")
+        combo.addItems(families)
+        combo.blockSignals(False)
+
+
+def bind_system_font_combo(main_window, combo, target_input, preview=False):
+    def _on_changed(text):
+        text = text.strip()
+        if not text or text == "请选择系统字体...":
+            return
+        target_input.setText(encode_system_font_value(text))
+        if preview:
+            main_window.original_font_family = text
+            if not main_window.generated_font_family:
+                main_window.update_previews()
+            if hasattr(main_window, 'chk_lock_file_name') and hasattr(main_window, 'chk_lock_font_name'):
+                lock_file = main_window.chk_lock_file_name.isChecked()
+                lock_font = main_window.chk_lock_font_name.isChecked()
+                if not lock_file:
+                    main_window.in_file_name.setText(f"{text}_out.ttf")
+                if not lock_font:
+                    main_window.in_font_name.setText(f"{text} Custom")
+
+    combo.currentTextChanged.connect(_on_changed)
+
+
+def try_select_combo_by_font_value(combo, value):
+    if combo is None or not value or not is_system_font_value(value):
+        return
+    family = decode_system_font_value(value)
+    idx = combo.findText(family)
+    if idx >= 0:
+        combo.blockSignals(True)
+        combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
 
 def reset_to_default(main_window):
     reply = QMessageBox.question(main_window, '确认重置', '确定要清除所有设置并恢复默认值吗？', QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
@@ -92,7 +147,15 @@ def load_preset(main_window):
         if 'tga_font' in preset: main_window.tga_font.setText(preset['tga_font'])
         if 'bmp_font' in preset: main_window.bmp_font.setText(preset['bmp_font'])
 
+        try_select_combo_by_font_value(getattr(main_window, 'src_system_font_combo', None), main_window.in_src.text())
+        try_select_combo_by_font_value(getattr(main_window, 'fallback_system_font_combo', None), main_window.in_fallback.text())
+        try_select_combo_by_font_value(getattr(main_window, 'pic_system_font_combo', None), main_window.pic_font.text())
+        try_select_combo_by_font_value(getattr(main_window, 'tga_system_font_combo', None), main_window.tga_font.text())
+        try_select_combo_by_font_value(getattr(main_window, 'bmp_system_font_combo', None), main_window.bmp_font.text())
+        main_window.on_source_font_changed()
+
         main_window.log(f"📂 预设已加载: {os.path.basename(load_path)}")
+
         QMessageBox.information(main_window, "加载成功", f"已从预设恢复配置：\n{os.path.basename(load_path)}")
 
     except Exception as e:
@@ -116,19 +179,21 @@ def set_ui_busy(main_window, busy):
 
 def on_worker_done(main_window, result):
     if result and isinstance(result, str):
-        if result.endswith('.ttf'):
+        if result.lower().endswith(('.ttf', '.otf', '.woff', '.woff2')):
             main_window.generated_font_path = result
-            main_window.pic_font.setText(result)
-            main_window.tga_font.setText(result)
-            main_window.bmp_font.setText(result)
+            if result.lower().endswith(('.ttf', '.otf')):
+                main_window.pic_font.setText(result)
+                main_window.tga_font.setText(result)
+                main_window.bmp_font.setText(result)
+                family = main_window.load_font_for_preview(result)
+                if family:
+                    main_window.generated_font_family = family
+                    main_window.update_previews()
             main_window.lbl_status.setText("字体已就绪")
-            family = main_window.load_font_for_preview(result)
-            if family:
-                main_window.generated_font_family = family
-                main_window.update_previews()
         elif result.endswith('.json'):
             main_window.in_json.setText(result)
             main_window.lbl_status.setText("映射表就绪")
+
     
     if hasattr(main_window, 'update_history_buttons'):
         main_window.update_history_buttons()
@@ -158,11 +223,24 @@ def load_settings(main_window):
     if idx >= 0: main_window.combo_theme.setCurrentIndex(idx)
     if hasattr(main_window, 'load_recent_files'):
         main_window.load_recent_files()
+    try_select_combo_by_font_value(getattr(main_window, 'src_system_font_combo', None), main_window.in_src.text())
+    try_select_combo_by_font_value(getattr(main_window, 'fallback_system_font_combo', None), main_window.in_fallback.text())
+    if hasattr(main_window, 'pic_font'):
+        try_select_combo_by_font_value(getattr(main_window, 'pic_system_font_combo', None), main_window.pic_font.text())
+    if hasattr(main_window, 'tga_font'):
+        try_select_combo_by_font_value(getattr(main_window, 'tga_system_font_combo', None), main_window.tga_font.text())
+    if hasattr(main_window, 'bmp_font'):
+        try_select_combo_by_font_value(getattr(main_window, 'bmp_system_font_combo', None), main_window.bmp_font.text())
     main_window.on_source_font_changed()
+
     if hasattr(main_window, 'update_history_buttons'):
         main_window.update_history_buttons()
 
 def load_font_for_preview(main_window, font_path):
+    if is_system_font_value(font_path):
+        family = decode_system_font_value(font_path)
+        main_window.log(f"🔎 预览已切换到系统字体: {family}")
+        return family
     if not os.path.exists(font_path):
         return None
     font_id = QFontDatabase.addApplicationFont(font_path)
@@ -172,6 +250,7 @@ def load_font_for_preview(main_window, font_path):
     family = QFontDatabase.applicationFontFamilies(font_id)[0]
     main_window.log(f"🔎 预览已加载: {family}")
     return family
+
 
 def update_previews(main_window):
     preview_text = main_window.preview_input.text()
@@ -187,25 +266,30 @@ def update_previews(main_window):
         main_window.preview_area.setToolTip("当前使用系统默认字体")
 
 def on_source_font_changed(main_window):
-    src_font_path = main_window.in_src.text()
+    src_font_path = main_window.in_src.text().strip()
     family = main_window.load_font_for_preview(src_font_path)
     if family:
         main_window.original_font_family = family
         if not main_window.generated_font_family:
             main_window.update_previews()
-    
-    if os.path.exists(src_font_path):
+
+    if is_system_font_value(src_font_path):
+        base_name = decode_system_font_value(src_font_path)
+    elif os.path.exists(src_font_path):
         base_name = os.path.splitext(os.path.basename(src_font_path))[0]
-        
-        lock_file = main_window.chk_lock_file_name.isChecked()
-        lock_font = main_window.chk_lock_font_name.isChecked()
-        
-        if not lock_file:
-            main_window.in_file_name.setText(f"{base_name}_out.ttf")
-        if not lock_font:
-            main_window.in_font_name.setText(f"{base_name} Custom")
-        if hasattr(main_window, 'add_to_recent_files'):
-            main_window.add_to_recent_files(src_font_path)
+    else:
+        return
+
+    lock_file = main_window.chk_lock_file_name.isChecked()
+    lock_font = main_window.chk_lock_font_name.isChecked()
+
+    if not lock_file:
+        main_window.in_file_name.setText(f"{base_name}_out.ttf")
+    if not lock_font:
+        main_window.in_font_name.setText(f"{base_name} Custom")
+    if os.path.exists(src_font_path) and hasattr(main_window, 'add_to_recent_files'):
+        main_window.add_to_recent_files(src_font_path)
+
 
 def on_mode_change(main_window, index):
     need_json = index in [1, 2]
@@ -214,12 +298,16 @@ def on_mode_change(main_window, index):
 
 def create_label(main_window, t): return QLabel(t)
 
-def create_file_row(main_window, inp, btn):
+def create_file_row(main_window, inp, btn, extra_widgets=None):
     l = QHBoxLayout()
     btn.clicked.connect(lambda: main_window.browse(inp))
     l.addWidget(inp)
     l.addWidget(btn)
+    if extra_widgets:
+        for widget in extra_widgets:
+            l.addWidget(widget)
     return l
+
 
 def get_scrollbar_style(main_window, accent):
     return f"""
@@ -348,6 +436,11 @@ def apply_theme(main_window, theme_name):
     main_window.combo_theme.setStyleSheet(combo_style)
     main_window.combo_mode.setStyleSheet(combo_style)
     main_window.combo_charset.setStyleSheet(combo_style)
+    for combo_name in ['src_system_font_combo', 'fallback_system_font_combo', 'pic_system_font_combo', 'tga_system_font_combo', 'bmp_system_font_combo']:
+        combo = getattr(main_window, combo_name, None)
+        if combo:
+            combo.setStyleSheet(combo_style)
+
     main_window.tab_container.setStyleSheet(f"background: {t['input_bg']}; border-radius: 15px;")
     main_window.tab_scroll_area.setStyleSheet(f"QScrollArea {{ background: transparent; border: none; }} {sb_style}")
     main_window.switch_tab(main_window.stack.currentIndex())
