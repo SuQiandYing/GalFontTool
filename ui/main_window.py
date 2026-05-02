@@ -2,8 +2,9 @@ import os
 import sys
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLabel, QProgressBar, QFrame, QStackedWidget, QComboBox,
-                             QGridLayout, QScrollArea, QSizePolicy, QScroller, QSplitter, QTextEdit, QMenu)
-from PyQt6.QtCore import Qt, QPoint, QRectF, QSettings
+                             QGridLayout, QScrollArea, QSizePolicy, QSplitter, QTextEdit, QMenu)
+from PyQt6.QtCore import Qt, QPoint, QRectF, QSettings, QTimer
+
 from PyQt6.QtGui import QFont, QCloseEvent, QShortcut, QKeySequence, QAction
 
 from config import THEMES
@@ -387,7 +388,8 @@ class GalFontTool(QMainWindow):
         right_layout.addWidget(self.tab_scroll_area)
 
         self.stack = QStackedWidget()
-        
+        self.stack.setMinimumHeight(300)
+
         p_info = QWidget(); ui_setup.setup_info_ui(self, p_info)
         p_mapping = QWidget(); ui_setup.setup_mapping_manager_ui(self, p_mapping)
         p_analysis = QWidget(); ui_setup.setup_font_analysis_ui(self, p_analysis)
@@ -405,20 +407,29 @@ class GalFontTool(QMainWindow):
 
         self.stack.addWidget(p_info); self.stack.addWidget(p_mapping); self.stack.addWidget(p_analysis)
         self.stack.addWidget(p_subset); self.stack.addWidget(p_merge); self.stack.addWidget(p_imgfont)
-        self.stack.addWidget(p_woff2); self.stack.addWidget(p_fix); self.stack.addWidget(p_clean); 
+        self.stack.addWidget(p_woff2); self.stack.addWidget(p_fix); self.stack.addWidget(p_clean)
         self.stack.addWidget(p_smart); self.stack.addWidget(p_help)
-        
-        splitter = QSplitter(Qt.Orientation.Vertical); splitter.setChildrenCollapsible(False)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.setChildrenCollapsible(False)
         splitter.setStyleSheet("QSplitter::handle { background-color: rgba(0,0,0,0.05); height: 8px; border-radius: 4px; margin: 2px 0px; } QSplitter::handle:hover { background-color: rgba(33, 150, 243, 0.6); }")
         splitter.addWidget(self.stack)
 
         self.log_area = IOSLog()
-        QScroller.grabGesture(self.log_area.viewport(), QScroller.ScrollerGestureType.LeftMouseButtonGesture)
+        self.log_area.setMinimumHeight(120)
+
         splitter.addWidget(self.log_area)
-        splitter.setStretchFactor(0, 7); splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(0, 6)
+        splitter.setStretchFactor(1, 4)
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+        self.main_splitter = splitter
         right_layout.addWidget(splitter)
+        QTimer.singleShot(0, lambda: self.main_splitter.setSizes([620, 320]))
+
 
         self.progress = QProgressBar(); self.progress.setFixedHeight(6); self.progress.setTextVisible(False)
+
         right_layout.addWidget(self.progress)
 
         content_layout.addWidget(self.left_card, 40)

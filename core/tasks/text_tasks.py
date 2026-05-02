@@ -3,6 +3,7 @@ import glob
 import json
 import unicodedata
 from fontTools.ttLib import TTFont
+from core.system_fonts import resolve_font_spec
 
 
 TEXT_READ_ENCODINGS = ['utf-8', 'utf-8-sig', 'cp932', 'gbk', 'utf-16']
@@ -49,6 +50,15 @@ def collect_unicode_cmap(font):
         if getattr(table, 'isUnicode', lambda: False)() and getattr(table, 'cmap', None):
             merged.update(table.cmap)
     return merged
+
+
+def _open_ttfont(font_value):
+    font_spec = resolve_font_spec(font_value)
+    font_path = str(font_spec.get('path') or '')
+    font_number = int(font_spec.get('font_number', 0) or 0)
+    if os.path.splitext(font_path)[1].lower() == '.ttc':
+        return TTFont(font_path, fontNumber=font_number)
+    return TTFont(font_path)
 
 
 def gen_mapping(conf, log_signal, prog_signal):
@@ -120,7 +130,7 @@ def gen_mapping(conf, log_signal, prog_signal):
     limit_font_chars = None
     if limit_font_path and os.path.exists(limit_font_path):
         try:
-            tmp_font = TTFont(limit_font_path)
+            tmp_font = _open_ttfont(limit_font_path)
             tmp_cmap = collect_unicode_cmap(tmp_font)
             limit_font_chars = set(chr(c) for c in tmp_cmap.keys() if c <= 0x10FFFF)
             tmp_font.close()
@@ -175,7 +185,7 @@ def gen_mapping(conf, log_signal, prog_signal):
     if limit_font_path and os.path.exists(limit_font_path):
         log_signal(f"🔒 <b>启用字体限制模式</b>: {os.path.basename(limit_font_path)}")
         try:
-            font = TTFont(limit_font_path)
+            font = _open_ttfont(limit_font_path)
             cmap = collect_unicode_cmap(font)
             font_chars = set(chr(c) for c in cmap.keys() if c <= 0x10FFFF)
             font.close()
@@ -342,7 +352,7 @@ def smart_fallback_scan(conf, log_signal, prog_signal):
     log_signal(f"📝 文本需求字符数: {len(needed_chars)}")
 
     try:
-        font = TTFont(primary)
+        font = _open_ttfont(primary)
         cmap = font.getBestCmap()
         existing_chars = set(chr(c) for c in cmap.keys())
         missing_chars = needed_chars - existing_chars

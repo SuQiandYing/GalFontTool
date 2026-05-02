@@ -3,6 +3,16 @@ import traceback
 from fontTools.ttLib import TTFont
 from core.utils import ensure_ttf
 from core.history_manager import get_history_manager
+from core.system_fonts import resolve_font_spec
+
+
+def _open_ttfont(font_value):
+    font_spec = resolve_font_spec(font_value)
+    font_path = str(font_spec.get('path') or '')
+    font_number = int(font_spec.get('font_number', 0) or 0)
+    if os.path.splitext(font_path)[1].lower() == '.ttc':
+        return TTFont(font_path, fontNumber=font_number)
+    return TTFont(font_path)
 
 
 def tweak_font_width(conf, log_signal, prog_signal):
@@ -27,7 +37,7 @@ def tweak_font_width(conf, log_signal, prog_signal):
     prog_signal(5)
 
     try:
-        font = TTFont(src)
+        font = _open_ttfont(src)
         ensure_ttf(font, log_signal, "目标字体")
         
         if 'glyf' not in font or 'hmtx' not in font:
@@ -129,7 +139,7 @@ def clean_font_tables(conf, log_signal, prog_signal):
     prog_signal(10)
 
     try:
-        font = TTFont(src)
+        font = _open_ttfont(src)
         ensure_ttf(font, log_signal, "源字体") 
         
         removed_count = 0
@@ -203,7 +213,7 @@ def gen_unified_fix(conf, log_signal, prog_signal):
     prog_signal(5)
 
     try:
-        font = TTFont(src)
+        font = _open_ttfont(src)
         ensure_ttf(font, log_signal, "目标字体")
         
         glyf = font['glyf']

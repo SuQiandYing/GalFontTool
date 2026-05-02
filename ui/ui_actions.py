@@ -9,6 +9,15 @@ from fontTools.ttLib import TTFont
 from fontTools import subset
 from core.utils import ensure_ttf
 from core import font_cache
+from core.system_fonts import resolve_font_spec
+
+def _open_ttfont(font_value, **kwargs):
+    font_spec = resolve_font_spec(font_value)
+    font_path = str(font_spec.get('path') or '')
+    font_number = int(font_spec.get('font_number', 0) or 0)
+    if os.path.splitext(font_path)[1].lower() == '.ttc':
+        kwargs.setdefault('fontNumber', font_number)
+    return _open_ttfont(font_path, **kwargs)
 
 def read_unified_metrics(main_window):
     src_path = main_window.fix_src.text()
@@ -19,8 +28,8 @@ def read_unified_metrics(main_window):
         return
 
     try:
-        src_font = TTFont(src_path)
-        ref_font = TTFont(ref_path)
+        src_font = _open_ttfont(src_path)
+        ref_font = _open_ttfont(ref_path)
 
         src_upm = src_font['head'].unitsPerEm
         ref_upm = ref_font['head'].unitsPerEm
@@ -81,11 +90,11 @@ def read_font_metrics(main_window):
     if not os.path.exists(path): return
 
     try:
-        target_font = TTFont(path)
+        target_font = _open_ttfont(path)
         tgt_upm = target_font['head'].unitsPerEm
 
         if os.path.exists(ref):
-            ref_font = TTFont(ref)
+            ref_font = _open_ttfont(ref)
             ref_upm = ref_font['head'].unitsPerEm
             hhea = ref_font['hhea']
 
@@ -126,7 +135,7 @@ def apply_font_metrics(main_window):
         desc = int(main_window.in_descender.text())
         gap = int(main_window.in_linegap.text())
 
-        font = TTFont(path)
+        font = _open_ttfont(path)
 
         font['hhea'].ascent = asc
         font['hhea'].descent = desc
@@ -292,11 +301,11 @@ def do_merge_fonts(main_window):
         
         main_window.log("🔗 <b>开始合并字体...</b>")
 
-        base_font = TTFont(base_path)
+        base_font = _open_ttfont(base_path)
         ensure_ttf(base_font, main_window.log, "基础字体")
         base_upm = base_font['head'].unitsPerEm
         
-        add_font = TTFont(add_path)
+        add_font = _open_ttfont(add_path)
         ensure_ttf(add_font, main_window.log, "来源字体")
         add_upm = add_font['head'].unitsPerEm
 
@@ -574,7 +583,7 @@ def do_read_font_info(main_window):
         return
 
     try:
-        font = TTFont(font_path)
+        font = _open_ttfont(font_path)
         name_table = font['name']
         
         name_map = {
@@ -635,7 +644,7 @@ def do_save_font_info(main_window):
         from core.history_manager import get_history_manager
         history = get_history_manager()
         
-        font = TTFont(font_path)
+        font = _open_ttfont(font_path)
         name_table = font['name']
         
         updated_count = 0
@@ -1230,7 +1239,7 @@ def do_convert_format(main_window):
         main_window.log(f"   源文件: {os.path.basename(src_path)} ({src_ext.upper()})")
         main_window.log(f"   目标: {os.path.basename(out_path)} ({out_ext.upper()})")
         
-        font = TTFont(src_path)
+        font = _open_ttfont(src_path)
         
         if src_ext == '.otf' and out_ext == '.ttf':
             if 'CFF ' in font:

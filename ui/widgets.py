@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QPushButton, QFrame, QLineEdit, QTextEdit, QGraphicsDropShadowEffect
+from PyQt6.QtWidgets import QPushButton, QFrame, QLineEdit, QTextEdit, QGraphicsDropShadowEffect, QSizePolicy
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QPoint, QRectF, QUrl, pyqtProperty
 from PyQt6.QtGui import QColor, QPainter, QPen, QDragEnterEvent, QDropEvent, QDesktopServices
 
@@ -159,6 +159,7 @@ class IOSLog(QTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setReadOnly(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def mouseReleaseEvent(self, e):
         super().mouseReleaseEvent(e)

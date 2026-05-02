@@ -5,7 +5,7 @@ import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
-from core.system_fonts import resolve_font_path
+from core.system_fonts import resolve_font_path, resolve_font_spec
 
 
 FONT_RENDER_THREAD_STATE = threading.local()
@@ -233,13 +233,21 @@ def _baseline_y_for_cell(font, y: int, cell_height: int) -> float:
     ascent, descent = font.getmetrics()
     return y + (cell_height - (ascent + descent)) / 2 + ascent
 
-def _get_font_render_context(font_path, font_size):
-    key = (os.path.abspath(font_path), int(font_size))
+def _create_pil_font(font_spec, font_size):
+    font_path = str((font_spec or {}).get('path') or '')
+    font_number = int((font_spec or {}).get('font_number', 0) or 0)
+    return ImageFont.truetype(font_path, font_size, index=font_number)
+
+
+def _get_font_render_context(font_spec, font_size):
+    font_path = str((font_spec or {}).get('path') or '')
+    font_number = int((font_spec or {}).get('font_number', 0) or 0)
+    key = (os.path.abspath(font_path), font_number, int(font_size))
     context = getattr(FONT_RENDER_THREAD_STATE, 'render_context', None)
     if context is None or context['key'] != key:
         context = {
             'key': key,
-            'font': ImageFont.truetype(font_path, font_size),
+            'font': _create_pil_font(font_spec, font_size),
             'glyph_metrics_cache': {},
         }
         FONT_RENDER_THREAD_STATE.render_context = context
@@ -357,7 +365,7 @@ def _render_pic_page(task):
     conf = task['conf']
     bg_color = conf.get('color_b', (0, 0, 0, 0))
     img = Image.new('RGBA', (conf['img_w'], conf['img_h']), bg_color)
-    context = _get_font_render_context(conf['font'], conf['fsize'])
+    context = _get_font_render_context(conf['font_spec'], conf['fsize'])
     font = context['font']
     glyph_metrics_cache = context['glyph_metrics_cache']
 
@@ -378,7 +386,8 @@ def _render_pic_page(task):
 
 def gen_pic(conf, log_signal, prog_signal):
     conf = dict(conf)
-    conf['font'] = resolve_font_path(conf['font'])
+    conf['font_spec'] = resolve_font_spec(conf['font'])
+    conf['font'] = str(conf['font_spec'].get('path') or '')
     conf = _normalize_pic_conf(conf)
 
     if not os.path.exists(conf['font']):
@@ -428,7 +437,8 @@ def gen_pic(conf, log_signal, prog_signal):
 
 def gen_tga(conf, log_signal, prog_signal):
     conf = dict(conf)
-    conf['font'] = resolve_font_path(conf['font'])
+    conf['font_spec'] = resolve_font_spec(conf['font'])
+    conf['font'] = str(conf['font_spec'].get('path') or '')
     if not os.path.exists(conf['font']): 
  
         log_signal("❌ 字体文件不存在！")
@@ -452,7 +462,7 @@ def gen_tga(conf, log_signal, prog_signal):
                 pass
 
     img = Image.new('RGBA', (conf['img_w'], conf['img_h']))
-    font = ImageFont.truetype(conf['font'], conf['fsize'])
+    font = _create_pil_font(conf['font_spec'], conf['fsize'])
     draw = ImageDraw.Draw(img)
 
     px, py = 0, 0
@@ -499,7 +509,8 @@ def gen_tga(conf, log_signal, prog_signal):
 
 def gen_bmp(conf, log_signal, prog_signal):
     conf = dict(conf)
-    conf['font'] = resolve_font_path(conf['font'])
+    conf['font_spec'] = resolve_font_spec(conf['font'])
+    conf['font'] = str(conf['font_spec'].get('path') or '')
     if not os.path.exists(conf['font']): 
  
         log_signal("❌ 字体文件不存在！")
@@ -507,7 +518,7 @@ def gen_bmp(conf, log_signal, prog_signal):
     log_signal("🚀 开始生成 BMP 长图字库...")
     if not os.path.exists(conf['folder']): os.makedirs(conf['folder'])
 
-    font = ImageFont.truetype(conf['font'], conf['fsize'])
+    font = _create_pil_font(conf['font_spec'], conf['fsize'])
     fl, sl = _get_jp_chars()
 
     palette = []
@@ -569,7 +580,8 @@ def gen_bmp(conf, log_signal, prog_signal):
     return None
 
 def gen_bmfont(conf, log_signal, prog_signal):
-    font_path = resolve_font_path(conf['font_path'])
+    font_spec = resolve_font_spec(conf['font_path'])
+    font_path = str(font_spec.get('path') or '')
 
     chars = conf['chars']
     tex_size = conf['tex_size']
@@ -587,7 +599,7 @@ def gen_bmfont(conf, log_signal, prog_signal):
     prog_signal(5)
     
     try:
-        pil_font = ImageFont.truetype(font_path, font_size)
+        pil_font = _create_pil_font(font_spec, font_size)
         metrics = [] 
         log_signal("📏 正在测量字形...")
         

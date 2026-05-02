@@ -9,8 +9,9 @@ from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib.tables._g_l_y_f import GlyphCoordinates
 from core.utils import ensure_ttf
 from core.history_manager import get_history_manager
-from core.system_fonts import resolve_font_path
+from core.system_fonts import resolve_font_path, resolve_font_spec
 from core.opencc_overrides import OPENCC_T2S_OVERRIDE, OPENCC_S2T_OVERRIDE
+
 
 
 SUPPORTED_BUILD_EXTENSIONS = ('.ttf', '.woff', '.woff2')
@@ -56,10 +57,21 @@ def _read_text_file_auto(path):
         return f.read(), 'utf-8-replace'
 
 
+def _open_ttfont_from_spec(font_spec: dict[str, object]) -> TTFont:
+    font_path = str(font_spec.get('path') or '')
+    font_number = int(font_spec.get('font_number', 0) or 0)
+    if os.path.splitext(font_path)[1].lower() == '.ttc':
+        return TTFont(font_path, fontNumber=font_number)
+    return TTFont(font_path)
+
+
 def build_font(conf, log_signal, prog_signal):
 
-    src = resolve_font_path(conf['src'])
-    fallback = resolve_font_path(conf.get('fallback', ''))
+    src_spec = resolve_font_spec(conf['src'])
+    fallback_spec = resolve_font_spec(conf.get('fallback', ''))
+    src = str(src_spec.get('path') or '')
+    fallback = str(fallback_spec.get('path') or '')
+
 
     json_path = conf['json']
     file_name = conf['file_name']
@@ -82,23 +94,27 @@ def build_font(conf, log_signal, prog_signal):
     mode_desc = {
         1: "日繁映射 (CN -> JP)", 2: "逆向映射 (JP -> CN)",
         3: "仅修改代码页标识", 4: "繁转简", 5: "简转繁"
-    }.get(mode, "未知")
+        }.get(mode, "未知")
 
-    log_signal(f"<b>🔨 开始字体处理...</b><br>模式: {mode_desc}<br>输入: {os.path.basename(src)}<br>输出: {out_name}")
+    src_label = str(src_spec.get('family') or os.path.basename(src))
+    fallback_label = str(fallback_spec.get('family') or os.path.basename(fallback)) if fallback else ''
+
+    log_signal(f"<b>🔨 开始字体处理...</b><br>模式: {mode_desc}<br>输入: {src_label}<br>输出: {out_name}")
     prog_signal(10)
 
     try:
-        font = TTFont(src)
+        font = _open_ttfont_from_spec(src_spec)
         ensure_ttf(font, log_signal, "主字体")
     except Exception as e:
         log_signal(f"❌ 字体读取失败: {str(e)}")
         return None
 
     if mode in [1, 2] and fallback and os.path.exists(fallback):
-        log_signal(f"🔧 检测到补全字体: {os.path.basename(fallback)}")
+        log_signal(f"🔧 检测到补全字体: {fallback_label or os.path.basename(fallback)}")
         try:
-            fb_font = TTFont(fallback)
+            fb_font = _open_ttfont_from_spec(fallback_spec)
             ensure_ttf(fb_font, log_signal, "补全字体")
+
 
             upm_main = font['head'].unitsPerEm
             upm_fb = fb_font['head'].unitsPerEm
