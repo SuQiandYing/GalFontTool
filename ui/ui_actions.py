@@ -17,7 +17,7 @@ def _open_ttfont(font_value, **kwargs):
     font_number = int(font_spec.get('font_number', 0) or 0)
     if os.path.splitext(font_path)[1].lower() == '.ttc':
         kwargs.setdefault('fontNumber', font_number)
-    return _open_ttfont(font_path, **kwargs)
+    return TTFont(font_path, **kwargs)
 
 def read_unified_metrics(main_window):
     src_path = main_window.fix_src.text()
@@ -58,6 +58,9 @@ def read_unified_metrics(main_window):
         main_window.log(f"   原版 Asc: {ref_hhea.ascent} -> 新 Asc: {target_asc}")
         main_window.log(f"   原版 Desc: {ref_hhea.descent} -> 新 Desc: {target_desc}")
         main_window.log("="*40)
+        
+        src_font.close()
+        ref_font.close()
         
     except Exception as e:
         QMessageBox.critical(main_window, "错误", f"计算失败: {e}")
@@ -119,6 +122,10 @@ def read_font_metrics(main_window):
         main_window.in_descender.setText(str(desc))
         main_window.in_linegap.setText(str(gap))
 
+        target_font.close()
+        if os.path.exists(ref):
+            ref_font.close()
+
     except Exception as e:
         main_window.log(f"❌ 读取失败: {e}")
         traceback.print_exc()
@@ -162,6 +169,7 @@ def apply_font_metrics(main_window):
             history.record_before_overwrite("应用度量", save_path, f"Asc{asc} Desc{desc}")
         
         font.save(save_path)
+        font.close()
         
         if not file_existed and os.path.exists(save_path):
             history.record_new_file("应用度量", save_path, f"Asc{asc} Desc{desc}")
@@ -315,6 +323,7 @@ def do_merge_fonts(main_window):
         need_scale = abs(scale - 1.0) > 0.01
 
         filter_text = main_window.merge_filter.text()
+        replace_text = main_window.merge_replace.text()
         add_cmap = add_font.getBestCmap()
         base_cmap = base_font.getBestCmap()
 
@@ -337,16 +346,24 @@ def do_merge_fonts(main_window):
         if not base_cmap and 'cmap' not in base_font:
             raise ValueError('基础字体缺少 cmap 表，无法执行合并补字')
   
+        replace_codes = set(ord(c) for c in replace_text)
+        
         if filter_text:
-
-            target_codes = sorted(set(ord(c) for c in filter_text))
-            main_window.log(f"   目标字符: {filter_text}")
+            target_codes = set(ord(c) for c in filter_text)
+            main_window.log(f"   指定补充字符: {filter_text}")
         else:
-            target_codes = sorted(code for code in add_cmap if code not in base_cmap)
-            main_window.log(f"   未指定字符，将补充来源字体中所有缺失的字符 (共 {len(target_codes)} 个)")
+            target_codes = set(code for code in add_cmap if code not in base_cmap)
+            main_window.log(f"   自动扫描补充字符 (共 {len(target_codes)} 个)")
 
-        # 仅保留来源字体中存在、且基础字体中缺失的字符，避免重复注入
-        target_codes = [code for code in target_codes if code in add_cmap and code not in base_cmap]
+        if replace_text:
+            target_codes.update(replace_codes)
+            main_window.log(f"   指定替换字符: {replace_text}")
+
+        # 最终待注入列表：必须在来源字体中存在
+        target_codes = sorted([code for code in target_codes if code in add_cmap])
+        
+        # 记录哪些是被强制替换的（本来就在基础字体里的）
+        replaced_count = sum(1 for code in target_codes if code in base_cmap)
 
         injected_count = 0
         skipped_codes = []
@@ -377,7 +394,11 @@ def do_merge_fonts(main_window):
 
 
         for code in target_codes:
-            if code not in add_cmap or code in base_cmap:
+            # 如果是正常补充模式且字符已存在，则跳过 (除非在强制替换列表里)
+            # 注意：这里的 target_codes 已经包含了强制替换的 code
+            # 而之前的逻辑是统一在外面过滤掉了所有 base_cmap 存在的 code
+            # 现在我们已经按需包含了 code，所以这里只需要保证 code 在 add_cmap 中
+            if code not in add_cmap:
                 continue
 
             try:
@@ -511,9 +532,11 @@ def do_merge_fonts(main_window):
         update_history_buttons(main_window)
         
         main_window.log(f"✅ <b>合并完成!</b>")
-        main_window.log(f"   成功注入: {injected_count} 个字符")
+        main_window.log(f"   成功注入/替换: {injected_count} 个字符")
+        if replaced_count > 0:
+             main_window.log(f"   其中强制替换: {replaced_count} 个字符")
         main_window.log(f"   输出: {out_path}")
-        QMessageBox.information(main_window, "合并成功", f"合并完成！\n成功从来源字体中提取并注入了 {injected_count} 个字符。\n输出: {out_path}")
+        QMessageBox.information(main_window, "合并成功", f"合并完成！\n成功从来源字体中提取并注入了 {injected_count} 个字符 (含 {replaced_count} 个替换)。\n输出: {out_path}")
     except Exception as e:
 
         main_window.log(f"❌ 合并失败: {e}")
@@ -629,7 +652,8 @@ def do_read_font_info(main_window):
             main_window.info_table.setItem(row, 0, id_item)
             main_window.info_table.setItem(row, 1, name_item)
             main_window.info_table.setItem(row, 2, val_item)
-
+            
+        font.close()
         main_window.log(f"📖 成功读取 {len(records)} 条元数据。")
 
     except Exception as e:
@@ -675,6 +699,7 @@ def do_save_font_info(main_window):
             history.record_before_overwrite("修改元数据", out_path, f"更新{updated_count}条")
         
         font.save(out_path)
+        font.close()
         
         if not file_existed and os.path.exists(out_path):
             history.record_new_file("修改元数据", out_path, f"更新{updated_count}条")

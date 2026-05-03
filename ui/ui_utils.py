@@ -106,6 +106,7 @@ def save_preset(main_window):
         'sub_json': main_window.sub_json.text(), 'sub_out': main_window.sub_out.text(),
         'pic_font': main_window.pic_font.text(), 'pic_folder': main_window.pic_folder.text(),
         'tga_font': main_window.tga_font.text(), 'bmp_font': main_window.bmp_font.text(),
+        'merge_replace': main_window.merge_replace.text(),
     }
     save_path, _ = QFileDialog.getSaveFileName(main_window, "保存预设", "my_preset.json", "JSON (*.json)")
     if save_path:
@@ -146,6 +147,7 @@ def load_preset(main_window):
         if 'pic_folder' in preset: main_window.pic_folder.setText(preset['pic_folder'])
         if 'tga_font' in preset: main_window.tga_font.setText(preset['tga_font'])
         if 'bmp_font' in preset: main_window.bmp_font.setText(preset['bmp_font'])
+        if 'merge_replace' in preset: main_window.merge_replace.setText(preset['merge_replace'])
 
         try_select_combo_by_font_value(getattr(main_window, 'src_system_font_combo', None), main_window.in_src.text())
         try_select_combo_by_font_value(getattr(main_window, 'fallback_system_font_combo', None), main_window.in_fallback.text())
@@ -529,7 +531,7 @@ def set_help_content(main_window):
     <p>仅保留翻译文本中切实使用到的字符，删除所有的多余无用字形，大幅减小字体文件体积（一般可将几十MB缩减至两三MB以内，显著加快系统载入）。</p>
     
     <h4>➕ 合并补字 & 智能补字</h4>
-    <p>当主游戏字体缺字时，自动在补全字体（如思源黑体）中抽取字形拼接到主字体中。智能补字更支持自动分析本地系统字库来源，一键推荐并补全所有缺失的罕见汉字。</p>
+    <p>当主游戏字体缺字时，自动在补全字体（如思源黑体）中抽取字形拼接到主字体中。支持“仅补指定字”以及“强制替换字”模式（即使原字体有该字也强制用新字形替换）。智能补字更支持自动分析本地系统字库来源，一键推荐并补全所有缺失的罕见汉字。</p>
     
     <h4>🖼️ 图片字库 (ImgFont)</h4>
     <p>游戏 UI 设计和古董引擎利器。一键将矢量字体散列并生成 PNG / WebP / TGA / BMP 及 BMFont 格式的等宽、纹理图片字库集合。</p>

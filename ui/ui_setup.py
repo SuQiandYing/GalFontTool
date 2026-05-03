@@ -805,6 +805,8 @@ def setup_merge_ui(main_window, parent_widget):
     main_window.merge_out = IOSInput("输出文件名", "merged.ttf")
     main_window.merge_filter = IOSInput("可选：仅添加这些字符 (留空则添加所有缺字)", "")
     main_window.merge_filter.setToolTip("在此输入您想从来源字体中提取的具体字符（如'♥★'）。\n如果不填，程序会自动把来源字体中所有基础字体没有的字都补进去。")
+    main_window.merge_replace = IOSInput("可选：强制替换这些字符", "")
+    main_window.merge_replace.setToolTip("即使基础字体中已经有了这些字符，也会强制使用来源字体中的字形替换它们。")
 
     btn_merge_base = QPushButton("📁")
     btn_merge_base.setFixedSize(40, 38)
@@ -817,8 +819,10 @@ def setup_merge_ui(main_window, parent_widget):
     gd.addLayout(main_window.create_file_row(main_window.merge_add, btn_merge_add), 1, 1)
     gd.addWidget(QLabel("3. 输出文件:"), 2, 0)
     gd.addWidget(main_window.merge_out, 2, 1)
-    gd.addWidget(QLabel("4. 指定字符:"), 3, 0)
+    gd.addWidget(QLabel("4. 仅补这些字:"), 3, 0)
     gd.addWidget(main_window.merge_filter, 3, 1)
+    gd.addWidget(QLabel("5. 强制替换字:"), 4, 0)
+    gd.addWidget(main_window.merge_replace, 4, 1)
 
     l_merge.addLayout(gd)
 
